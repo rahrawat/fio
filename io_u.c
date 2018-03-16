@@ -430,7 +430,11 @@ static int get_next_seq_offset(struct thread_data *td, struct fio_file *f,
 	if (f->last_pos[ddir] < f->real_file_size) {
 		uint64_t pos;
 
-		if (f->last_pos[ddir] == f->file_offset && o->ddir_seq_add < 0) {
+		/*
+		 * Only rewind if we already hit the end
+		 */
+		if (f->last_pos[ddir] == f->file_offset &&
+		    f->file_offset && o->ddir_seq_add < 0) {
 			if (f->real_file_size > f->io_size)
 				f->last_pos[ddir] = f->io_size;
 			else
@@ -470,7 +474,7 @@ static int get_next_seq_offset(struct thread_data *td, struct fio_file *f,
 
 static int get_next_block(struct thread_data *td, struct io_u *io_u,
 			  enum fio_ddir ddir, int rw_seq,
-			  unsigned int *is_random)
+			  bool *is_random)
 {
 	struct fio_file *f = io_u->file;
 	uint64_t b, offset;
@@ -484,27 +488,27 @@ static int get_next_block(struct thread_data *td, struct io_u *io_u,
 		if (td_random(td)) {
 			if (should_do_random(td, ddir)) {
 				ret = get_next_rand_block(td, f, ddir, &b);
-				*is_random = 1;
+				*is_random = true;
 			} else {
-				*is_random = 0;
+				*is_random = false;
 				io_u_set(td, io_u, IO_U_F_BUSY_OK);
 				ret = get_next_seq_offset(td, f, ddir, &offset);
 				if (ret)
 					ret = get_next_rand_block(td, f, ddir, &b);
 			}
 		} else {
-			*is_random = 0;
+			*is_random = false;
 			ret = get_next_seq_offset(td, f, ddir, &offset);
 		}
 	} else {
 		io_u_set(td, io_u, IO_U_F_BUSY_OK);
-		*is_random = 0;
+		*is_random = false;
 
 		if (td->o.rw_seq == RW_SEQ_SEQ) {
 			ret = get_next_seq_offset(td, f, ddir, &offset);
 			if (ret) {
 				ret = get_next_rand_block(td, f, ddir, &b);
-				*is_random = 0;
+				*is_random = false;
 			}
 		} else if (td->o.rw_seq == RW_SEQ_IDENT) {
 			if (f->last_start[ddir] != -1ULL)
@@ -537,8 +541,8 @@ static int get_next_block(struct thread_data *td, struct io_u *io_u,
  * until we find a free one. For sequential io, just return the end of
  * the last io issued.
  */
-static int __get_next_offset(struct thread_data *td, struct io_u *io_u,
-			     unsigned int *is_random)
+static int get_next_offset(struct thread_data *td, struct io_u *io_u,
+			   bool *is_random)
 {
 	struct fio_file *f = io_u->file;
 	enum fio_ddir ddir = io_u->ddir;
@@ -572,19 +576,6 @@ static int __get_next_offset(struct thread_data *td, struct io_u *io_u,
 	return 0;
 }
 
-static int get_next_offset(struct thread_data *td, struct io_u *io_u,
-			   unsigned int *is_random)
-{
-	if (td->flags & TD_F_PROFILE_OPS) {
-		struct prof_io_ops *ops = &td->prof_io_ops;
-
-		if (ops->fill_io_u_off)
-			return ops->fill_io_u_off(td, io_u, is_random);
-	}
-
-	return __get_next_offset(td, io_u, is_random);
-}
-
 static inline bool io_u_fits(struct thread_data *td, struct io_u *io_u,
 			     unsigned int buflen)
 {
@@ -593,8 +584,8 @@ static inline bool io_u_fits(struct thread_data *td, struct io_u *io_u,
 	return io_u->offset + buflen <= f->io_size + get_start_offset(td, f);
 }
 
-static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
-				      unsigned int is_random)
+static unsigned int get_next_buflen(struct thread_data *td, struct io_u *io_u,
+				    bool is_random)
 {
 	int ddir = io_u->ddir;
 	unsigned int buflen = 0;
@@ -605,7 +596,7 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
 	assert(ddir_rw(ddir));
 
 	if (td->o.bs_is_seq_rand)
-		ddir = is_random ? DDIR_WRITE: DDIR_READ;
+		ddir = is_random ? DDIR_WRITE : DDIR_READ;
 
 	minbs = td->o.min_bs[ddir];
 	maxbs = td->o.max_bs[ddir];
@@ -653,19 +644,6 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
 	} while (!io_u_fits(td, io_u, buflen));
 
 	return buflen;
-}
-
-static unsigned int get_next_buflen(struct thread_data *td, struct io_u *io_u,
-				    unsigned int is_random)
-{
-	if (td->flags & TD_F_PROFILE_OPS) {
-		struct prof_io_ops *ops = &td->prof_io_ops;
-
-		if (ops->fill_io_u_size)
-			return ops->fill_io_u_size(td, io_u, is_random);
-	}
-
-	return __get_next_buflen(td, io_u, is_random);
 }
 
 static void set_rwmix_bytes(struct thread_data *td)
@@ -957,7 +935,7 @@ static void __fill_io_u_zone(struct thread_data *td, struct io_u *io_u)
 
 static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 {
-	unsigned int is_random;
+	bool is_random;
 
 	if (td_ioengine_flagged(td, FIO_NOIO))
 		goto out;
@@ -1012,7 +990,7 @@ out:
 	return 0;
 }
 
-static void __io_u_mark_map(unsigned int *map, unsigned int nr)
+static void __io_u_mark_map(uint64_t *map, unsigned int nr)
 {
 	int idx = 0;
 
@@ -1387,13 +1365,6 @@ out:
 
 static struct fio_file *get_next_file(struct thread_data *td)
 {
-	if (td->flags & TD_F_PROFILE_OPS) {
-		struct prof_io_ops *ops = &td->prof_io_ops;
-
-		if (ops->get_next_file)
-			return ops->get_next_file(td);
-	}
-
 	return __get_next_file(td);
 }
 

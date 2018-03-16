@@ -1036,7 +1036,7 @@ int setup_files(struct thread_data *td)
 		if (f->io_size == -1ULL)
 			total_size = -1ULL;
 		else {
-                        if (o->size_percent) {
+                        if (o->size_percent && o->size_percent != 100) {
 				uint64_t file_size;
 
 				file_size = f->io_size + f->file_offset;
@@ -1481,7 +1481,7 @@ static struct fio_file *alloc_new_file(struct thread_data *td)
 	if (td_ioengine_flagged(td, FIO_NOFILEHASH))
 		f = calloc(1, sizeof(*f));
 	else
-		f = smalloc(sizeof(*f));
+		f = scalloc(1, sizeof(*f));
 	if (!f) {
 		assert(0);
 		return NULL;

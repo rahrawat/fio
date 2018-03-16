@@ -4,19 +4,18 @@ endif
 
 VPATH := $(SRCDIR)
 
-ifneq ($(wildcard config-host.mak),)
-all:
-include config-host.mak
-config-host-mak: configure
-	@echo $@ is out-of-date, running configure
-	@sed -n "/.*Configured with/s/[^:]*: //p" $@ | sh
-else
-config-host.mak:
+all: fio
+
+config-host.mak: configure
+	@if [ ! -e "$@" ]; then					\
+	  echo "Running configure ...";				\
+	  ./configure;						\
+	else							\
+	  echo "$@ is out-of-date, running configure";		\
+	  sed -n "/.*Configured with/s/[^:]*: //p" "$@" | sh;	\
+	fi
+
 ifneq ($(MAKECMDGOALS),clean)
-	@echo "Running configure for you..."
-	@./configure
-endif
-all:
 include config-host.mak
 endif
 
@@ -30,6 +29,9 @@ SCRIPTS = $(addprefix $(SRCDIR)/,tools/fio_generate_plots tools/plot/fio2gnuplot
 
 ifndef CONFIG_FIO_NO_OPT
   CFLAGS += -O3 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2
+endif
+ifdef CONFIG_BUILD_NATIVE
+  CFLAGS += -march=native
 endif
 
 ifdef CONFIG_GFIO

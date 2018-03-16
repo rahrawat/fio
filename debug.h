@@ -43,6 +43,7 @@ enum {
 	FIO_WARN_VERIFY_BUF	= 2,
 	FIO_WARN_ZONED_BUG	= 4,
 	FIO_WARN_IOLOG_DROP	= 8,
+	FIO_WARN_FADVISE	= 16,
 };
 
 #ifdef FIO_INC_DEBUG
@@ -52,7 +53,7 @@ struct debug_level {
 	unsigned long shift;
 	unsigned int jobno;
 };
-extern struct debug_level debug_levels[];
+extern const struct debug_level debug_levels[];
 
 extern unsigned long fio_debug;
 
