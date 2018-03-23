@@ -4,7 +4,6 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <libgen.h>
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -15,11 +14,11 @@
 
 #include "flist.h"
 #include "fio.h"
-#include "verify.h"
 #include "trim.h"
 #include "filelock.h"
 #include "smalloc.h"
 #include "blktrace.h"
+#include "pshared.h"
 
 static int iolog_flush(struct io_log *log);
 

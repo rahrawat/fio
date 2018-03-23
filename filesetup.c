@@ -5,8 +5,6 @@
 #include <dirent.h>
 #include <libgen.h>
 #include <sys/stat.h>
-#include <sys/mman.h>
-#include <sys/types.h>
 
 #include "fio.h"
 #include "smalloc.h"
@@ -15,6 +13,7 @@
 #include "os/os.h"
 #include "hash.h"
 #include "lib/axmap.h"
+#include "rwlock.h"
 
 #ifdef CONFIG_LINUX_FALLOCATE
 #include <linux/falloc.h>
@@ -1609,8 +1608,9 @@ int add_file(struct thread_data *td, const char *fname, int numjob, int inc)
 		f->file_name = strdup(file_name);
 	else
 		f->file_name = smalloc_strdup(file_name);
-	if (!f->file_name)
-		assert(0);
+
+	/* can't handle smalloc failure from here */
+	assert(f->file_name);
 
 	get_file_type(f);
 
@@ -1621,7 +1621,7 @@ int add_file(struct thread_data *td, const char *fname, int numjob, int inc)
 		f->rwlock = fio_rwlock_init();
 		break;
 	case FILE_LOCK_EXCLUSIVE:
-		f->lock = fio_mutex_init(FIO_MUTEX_UNLOCKED);
+		f->lock = fio_sem_init(FIO_SEM_UNLOCKED);
 		break;
 	default:
 		log_err("fio: unknown lock mode: %d\n", td->o.file_lock_mode);
@@ -1706,7 +1706,7 @@ void lock_file(struct thread_data *td, struct fio_file *f, enum fio_ddir ddir)
 		else
 			fio_rwlock_write(f->rwlock);
 	} else if (td->o.file_lock_mode == FILE_LOCK_EXCLUSIVE)
-		fio_mutex_down(f->lock);
+		fio_sem_down(f->lock);
 
 	td->file_locks[f->fileno] = td->o.file_lock_mode;
 }
@@ -1719,7 +1719,7 @@ void unlock_file(struct thread_data *td, struct fio_file *f)
 	if (td->o.file_lock_mode == FILE_LOCK_READWRITE)
 		fio_rwlock_unlock(f->rwlock);
 	else if (td->o.file_lock_mode == FILE_LOCK_EXCLUSIVE)
-		fio_mutex_up(f->lock);
+		fio_sem_up(f->lock);
 
 	td->file_locks[f->fileno] = FILE_LOCK_NONE;
 }
@@ -1815,9 +1815,9 @@ void dup_files(struct thread_data *td, struct thread_data *org)
 				__f->file_name = strdup(f->file_name);
 			else
 				__f->file_name = smalloc_strdup(f->file_name);
-			if (!__f->file_name)
-				assert(0);
 
+			/* can't handle smalloc failure from here */
+			assert(__f->file_name);
 			__f->filetype = f->filetype;
 		}
 

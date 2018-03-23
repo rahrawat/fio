@@ -1,10 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <unistd.h>
-#include <limits.h>
 #include <errno.h>
-#include <sys/poll.h>
+#include <poll.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -25,7 +23,7 @@
 #include "server.h"
 #include "crc/crc16.h"
 #include "lib/ieee754.h"
-#include "verify.h"
+#include "verify-state.h"
 #include "smalloc.h"
 
 int fio_net_port = FIO_NET_PORT;
@@ -74,7 +72,7 @@ struct fio_fork_item {
 };
 
 struct cmd_reply {
-	struct fio_mutex lock;
+	struct fio_sem lock;
 	void *data;
 	size_t size;
 	int error;
@@ -108,12 +106,12 @@ static const char *fio_server_ops[FIO_NET_CMD_NR] = {
 
 static void sk_lock(struct sk_out *sk_out)
 {
-	fio_mutex_down(&sk_out->lock);
+	fio_sem_down(&sk_out->lock);
 }
 
 static void sk_unlock(struct sk_out *sk_out)
 {
-	fio_mutex_up(&sk_out->lock);
+	fio_sem_up(&sk_out->lock);
 }
 
 void sk_out_assign(struct sk_out *sk_out)
@@ -129,9 +127,9 @@ void sk_out_assign(struct sk_out *sk_out)
 
 static void sk_out_free(struct sk_out *sk_out)
 {
-	__fio_mutex_remove(&sk_out->lock);
-	__fio_mutex_remove(&sk_out->wait);
-	__fio_mutex_remove(&sk_out->xmit);
+	__fio_sem_remove(&sk_out->lock);
+	__fio_sem_remove(&sk_out->wait);
+	__fio_sem_remove(&sk_out->xmit);
 	sfree(sk_out);
 }
 
@@ -528,6 +526,9 @@ static struct sk_entry *fio_net_prep_cmd(uint16_t opcode, void *buf,
 	struct sk_entry *entry;
 
 	entry = smalloc(sizeof(*entry));
+	if (!entry)
+		return NULL;
+
 	INIT_FLIST_HEAD(&entry->next);
 	entry->opcode = opcode;
 	if (flags & SK_F_COPY) {
@@ -558,7 +559,7 @@ static void fio_net_queue_entry(struct sk_entry *entry)
 		flist_add_tail(&entry->list, &sk_out->list);
 		sk_unlock(sk_out);
 
-		fio_mutex_up(&sk_out->wait);
+		fio_sem_up(&sk_out->wait);
 	}
 }
 
@@ -616,7 +617,7 @@ static int fio_net_queue_quit(void)
 {
 	dprint(FD_NET, "server: sending quit\n");
 
-	return fio_net_queue_cmd(FIO_NET_CMD_QUIT, NULL, 0, NULL, SK_F_SIMPLE | SK_F_INLINE);
+	return fio_net_queue_cmd(FIO_NET_CMD_QUIT, NULL, 0, NULL, SK_F_SIMPLE);
 }
 
 int fio_net_send_quit(int sk)
@@ -636,7 +637,7 @@ static int fio_net_send_ack(struct fio_net_cmd *cmd, int error, int signal)
 
 	epdu.error = __cpu_to_le32(error);
 	epdu.signal = __cpu_to_le32(signal);
-	return fio_net_queue_cmd(FIO_NET_CMD_STOP, &epdu, sizeof(epdu), &tag, SK_F_COPY | SK_F_INLINE);
+	return fio_net_queue_cmd(FIO_NET_CMD_STOP, &epdu, sizeof(epdu), &tag, SK_F_COPY);
 }
 
 static int fio_net_queue_stop(int error, int signal)
@@ -1039,7 +1040,7 @@ static int handle_command(struct sk_out *sk_out, struct flist_head *job_list,
 				memcpy(rep->data, in->data, in->size);
 			}
 		}
-		fio_mutex_up(&rep->lock);
+		fio_sem_up(&rep->lock);
 		break;
 		}
 	default:
@@ -1138,7 +1139,7 @@ static int handle_sk_entry(struct sk_out *sk_out, struct sk_entry *entry)
 {
 	int ret;
 
-	fio_mutex_down(&sk_out->xmit);
+	fio_sem_down(&sk_out->xmit);
 
 	if (entry->flags & SK_F_VEC)
 		ret = send_vec_entry(sk_out, entry);
@@ -1150,7 +1151,7 @@ static int handle_sk_entry(struct sk_out *sk_out, struct sk_entry *entry)
 					entry->size, &entry->tag, NULL);
 	}
 
-	fio_mutex_up(&sk_out->xmit);
+	fio_sem_up(&sk_out->xmit);
 
 	if (ret)
 		log_err("fio: failed handling cmd %s\n", fio_server_op(entry->opcode));
@@ -1215,7 +1216,7 @@ static int handle_connection(struct sk_out *sk_out)
 				break;
 			} else if (!ret) {
 				fio_server_check_jobs(&job_list);
-				fio_mutex_down_timeout(&sk_out->wait, timeout);
+				fio_sem_down_timeout(&sk_out->wait, timeout);
 				continue;
 			}
 
@@ -1358,12 +1359,17 @@ static int accept_loop(int listen_sk)
 
 		dprint(FD_NET, "server: connect from %s\n", from);
 
-		sk_out = smalloc(sizeof(*sk_out));
+		sk_out = scalloc(1, sizeof(*sk_out));
+		if (!sk_out) {
+			close(sk);
+			return -1;
+		}
+
 		sk_out->sk = sk;
 		INIT_FLIST_HEAD(&sk_out->list);
-		__fio_mutex_init(&sk_out->lock, FIO_MUTEX_UNLOCKED);
-		__fio_mutex_init(&sk_out->wait, FIO_MUTEX_LOCKED);
-		__fio_mutex_init(&sk_out->xmit, FIO_MUTEX_UNLOCKED);
+		__fio_sem_init(&sk_out->lock, FIO_SEM_UNLOCKED);
+		__fio_sem_init(&sk_out->wait, FIO_SEM_LOCKED);
+		__fio_sem_init(&sk_out->xmit, FIO_SEM_UNLOCKED);
 
 		pid = fork();
 		if (pid) {
@@ -1695,8 +1701,8 @@ static inline void __fio_net_prep_tail(z_stream *stream, void *out_pdu,
 
 	*last_entry = fio_net_prep_cmd(FIO_NET_CMD_IOLOG, out_pdu, this_len,
 				 NULL, SK_F_VEC | SK_F_INLINE | SK_F_FREE);
-	flist_add_tail(&(*last_entry)->list, &first->next);
-
+	if (*last_entry)
+		flist_add_tail(&(*last_entry)->list, &first->next);
 }
 
 /*
@@ -1712,9 +1718,10 @@ static int __deflate_pdu_buffer(void *next_in, unsigned int next_sz, void **out_
 	stream->next_in = next_in;
 	stream->avail_in = next_sz;
 	do {
-		if (! stream->avail_out) {
-
+		if (!stream->avail_out) {
 			__fio_net_prep_tail(stream, *out_pdu, last_entry, first);
+			if (*last_entry == NULL)
+				return 1;
 
 			*out_pdu = malloc(FIO_SERVER_MAX_FRAGMENT_PDU);
 
@@ -1778,8 +1785,7 @@ static int __fio_append_iolog_gz_hist(struct sk_entry *first, struct io_log *log
 	}
 
 	__fio_net_prep_tail(stream, out_pdu, &entry, first);
-
-	return 0;
+	return entry == NULL;
 }
 
 static int __fio_append_iolog_gz(struct sk_entry *first, struct io_log *log,
@@ -1818,6 +1824,10 @@ static int __fio_append_iolog_gz(struct sk_entry *first, struct io_log *log,
 
 		entry = fio_net_prep_cmd(FIO_NET_CMD_IOLOG, out_pdu, this_len,
 					 NULL, SK_F_VEC | SK_F_INLINE | SK_F_FREE);
+		if (!entry) {
+			free(out_pdu);
+			return 1;
+		}
 		flist_add_tail(&entry->list, &first->next);
 	} while (stream->avail_in);
 
@@ -1869,6 +1879,10 @@ static int fio_append_iolog_gz(struct sk_entry *first, struct io_log *log)
 
 		entry = fio_net_prep_cmd(FIO_NET_CMD_IOLOG, out_pdu, this_len,
 					 NULL, SK_F_VEC | SK_F_INLINE | SK_F_FREE);
+		if (!entry) {
+			free(out_pdu);
+			break;
+		}
 		flist_add_tail(&entry->list, &first->next);
 	} while (ret != Z_STREAM_END);
 
@@ -1889,6 +1903,7 @@ static int fio_append_gz_chunks(struct sk_entry *first, struct io_log *log)
 {
 	struct sk_entry *entry;
 	struct flist_head *node;
+	int ret = 0;
 
 	pthread_mutex_lock(&log->chunk_lock);
 	flist_for_each(node, &log->chunk_list) {
@@ -1897,16 +1912,20 @@ static int fio_append_gz_chunks(struct sk_entry *first, struct io_log *log)
 		c = flist_entry(node, struct iolog_compress, list);
 		entry = fio_net_prep_cmd(FIO_NET_CMD_IOLOG, c->buf, c->len,
 						NULL, SK_F_VEC | SK_F_INLINE);
+		if (!entry) {
+			ret = 1;
+			break;
+		}
 		flist_add_tail(&entry->list, &first->next);
 	}
 	pthread_mutex_unlock(&log->chunk_lock);
-
-	return 0;
+	return ret;
 }
 
 static int fio_append_text_log(struct sk_entry *first, struct io_log *log)
 {
 	struct sk_entry *entry;
+	int ret = 0;
 
 	while (!flist_empty(&log->io_logs)) {
 		struct io_logs *cur_log;
@@ -1919,10 +1938,14 @@ static int fio_append_text_log(struct sk_entry *first, struct io_log *log)
 
 		entry = fio_net_prep_cmd(FIO_NET_CMD_IOLOG, cur_log->log, size,
 						NULL, SK_F_VEC | SK_F_INLINE);
+		if (!entry) {
+			ret = 1;
+			break;
+		}
 		flist_add_tail(&entry->list, &first->next);
 	}
 
-	return 0;
+	return ret;
 }
 
 int fio_send_iolog(struct thread_data *td, struct io_log *log, const char *name)
@@ -1977,6 +2000,8 @@ int fio_send_iolog(struct thread_data *td, struct io_log *log, const char *name)
 	 * Assemble header entry first
 	 */
 	first = fio_net_prep_cmd(FIO_NET_CMD_IOLOG, &pdu, sizeof(pdu), NULL, SK_F_VEC | SK_F_INLINE | SK_F_COPY);
+	if (!first)
+		return 1;
 
 	/*
 	 * Now append actual log entries. If log compression was enabled on
@@ -2033,7 +2058,7 @@ int fio_server_get_verify_state(const char *name, int threadnumber,
 	if (!rep)
 		return ENOMEM;
 
-	__fio_mutex_init(&rep->lock, FIO_MUTEX_LOCKED);
+	__fio_sem_init(&rep->lock, FIO_SEM_LOCKED);
 	rep->data = NULL;
 	rep->error = 0;
 
@@ -2046,7 +2071,7 @@ int fio_server_get_verify_state(const char *name, int threadnumber,
 	/*
 	 * Wait for the backend to receive the reply
 	 */
-	if (fio_mutex_down_timeout(&rep->lock, 10000)) {
+	if (fio_sem_down_timeout(&rep->lock, 10000)) {
 		log_err("fio: timed out waiting for reply\n");
 		ret = ETIMEDOUT;
 		goto fail;
@@ -2083,7 +2108,7 @@ fail:
 	*datap = data;
 
 	sfree(rep->data);
-	__fio_mutex_remove(&rep->lock);
+	__fio_sem_remove(&rep->lock);
 	sfree(rep);
 	return ret;
 }
