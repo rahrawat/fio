@@ -1184,7 +1184,7 @@ static void init_flags(struct thread_data *td)
 	    fio_option_is_set(o, zero_buffers)))
 		td->flags |= TD_F_SCRAMBLE_BUFFERS;
 	if (o->verify != VERIFY_NONE)
-		td->flags |= TD_F_VER_NONE;
+		td->flags |= TD_F_DO_VERIFY;
 
 	if (o->verify_async || o->io_submit_mode == IO_MODE_OFFLOAD)
 		td->flags |= TD_F_NEED_LOCK;
@@ -1970,7 +1970,8 @@ static int __parse_jobs_ini(struct thread_data *td,
 			if (p[0] == '[') {
 				if (nested) {
 					log_err("No new sections in included files\n");
-					return 1;
+					ret = 1;
+					goto out;
 				}
 
 				skip_fgets = 1;

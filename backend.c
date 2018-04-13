@@ -723,6 +723,7 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 					break;
 				} else if (io_u->ddir == DDIR_WRITE) {
 					io_u->ddir = DDIR_READ;
+					populate_verify_io_u(td, io_u);
 					break;
 				} else {
 					put_io_u(td, io_u);
@@ -994,6 +995,9 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 				goto reap;
 			break;
 		}
+
+		if (io_u->ddir == DDIR_WRITE && td->flags & TD_F_DO_VERIFY)
+			populate_verify_io_u(td, io_u);
 
 		ddir = io_u->ddir;
 
@@ -1328,7 +1332,7 @@ static int init_io_u(struct thread_data *td)
 static int switch_ioscheduler(struct thread_data *td)
 {
 #ifdef FIO_HAVE_IOSCHED_SWITCH
-	char tmp[256], tmp2[128];
+	char tmp[256], tmp2[128], *p;
 	FILE *f;
 	int ret;
 
@@ -1364,17 +1368,19 @@ static int switch_ioscheduler(struct thread_data *td)
 	/*
 	 * Read back and check that the selected scheduler is now the default.
 	 */
-	memset(tmp, 0, sizeof(tmp));
-	ret = fread(tmp, sizeof(tmp), 1, f);
+	ret = fread(tmp, 1, sizeof(tmp) - 1, f);
 	if (ferror(f) || ret < 0) {
 		td_verror(td, errno, "fread");
 		fclose(f);
 		return 1;
 	}
+	tmp[ret] = '\0';
 	/*
-	 * either a list of io schedulers or "none\n" is expected.
+	 * either a list of io schedulers or "none\n" is expected. Strip the
+	 * trailing newline.
 	 */
-	tmp[strlen(tmp) - 1] = '\0';
+	p = tmp;
+	strsep(&p, "\n");
 
 	/*
 	 * Write to "none" entry doesn't fail, so check the result here.
