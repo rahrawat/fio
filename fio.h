@@ -44,6 +44,7 @@
 #include "io_u_queue.h"
 #include "workqueue.h"
 #include "steadystate.h"
+#include "lib/nowarn_snprintf.h"
 
 #ifdef CONFIG_SOLARISAIO
 #include <sys/asynch.h>
@@ -468,7 +469,9 @@ enum {
 			break;						\
 		(td)->error = ____e;					\
 		if (!(td)->first_error)					\
-			snprintf(td->verror, sizeof(td->verror), "file:%s:%d, func=%s, error=%s", __FILE__, __LINE__, (func), (msg));		\
+			nowarn_snprintf(td->verror, sizeof(td->verror),	\
+					"file:%s:%d, func=%s, error=%s", \
+					__FILE__, __LINE__, (func), (msg)); \
 	} while (0)
 
 
@@ -718,22 +721,17 @@ static inline bool option_check_rate(struct thread_data *td, enum fio_ddir ddir)
 	return false;
 }
 
-static inline bool __should_check_rate(struct thread_data *td,
-				       enum fio_ddir ddir)
+static inline bool __should_check_rate(struct thread_data *td)
 {
 	return (td->flags & TD_F_CHECK_RATE) != 0;
 }
 
 static inline bool should_check_rate(struct thread_data *td)
 {
-	if (__should_check_rate(td, DDIR_READ) && td->bytes_done[DDIR_READ])
-		return true;
-	if (__should_check_rate(td, DDIR_WRITE) && td->bytes_done[DDIR_WRITE])
-		return true;
-	if (__should_check_rate(td, DDIR_TRIM) && td->bytes_done[DDIR_TRIM])
-		return true;
+	if (!__should_check_rate(td))
+		return false;
 
-	return false;
+	return ddir_rw_sum(td->bytes_done) != 0;
 }
 
 static inline unsigned int td_max_bs(struct thread_data *td)
