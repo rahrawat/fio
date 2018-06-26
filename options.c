@@ -1555,9 +1555,9 @@ static int rw_verify(const struct fio_option *o, void *data)
 {
 	struct thread_data *td = cb_data_to_td(data);
 
-	if (read_only && td_write(td)) {
-		log_err("fio: job <%s> has write bit set, but fio is in"
-			" read-only mode\n", td->o.name);
+	if (read_only && (td_write(td) || td_trim(td))) {
+		log_err("fio: job <%s> has write or trim bit set, but"
+			" fio is in read-only mode\n", td->o.name);
 		return 1;
 	}
 
@@ -4790,7 +4790,7 @@ static char *bc_calc(char *str)
  * substitution always occurs, even if VARNAME is empty or the corresponding
  * environment variable undefined.
  */
-static char *option_dup_subs(const char *opt)
+char *fio_option_dup_subs(const char *opt)
 {
 	char out[OPT_LEN_MAX+1];
 	char in[OPT_LEN_MAX+1];
@@ -4895,7 +4895,7 @@ static char **dup_and_sub_options(char **opts, int num_opts)
 	int i;
 	char **opts_copy = malloc(num_opts * sizeof(*opts));
 	for (i = 0; i < num_opts; i++) {
-		opts_copy[i] = option_dup_subs(opts[i]);
+		opts_copy[i] = fio_option_dup_subs(opts[i]);
 		if (!opts_copy[i])
 			continue;
 		opts_copy[i] = fio_keyword_replace(opts_copy[i]);

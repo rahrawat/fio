@@ -118,6 +118,58 @@ static int read_data(int fd, void *data, size_t size)
 	return 0;
 }
 
+static int read_ini_data(int fd, void *data, size_t size)
+{
+	char *p = data;
+	int ret = 0;
+	FILE *fp;
+	int dupfd;
+
+	dupfd = dup(fd);
+	if (dupfd < 0)
+		return errno;
+
+	fp = fdopen(dupfd, "r");
+	if (!fp) {
+		ret = errno;
+		close(dupfd);
+		goto out;
+	}
+
+	while (1) {
+		ssize_t len;
+		char buf[OPT_LEN_MAX+1], *sub;
+
+		if (!fgets(buf, sizeof(buf), fp)) {
+			if (ferror(fp)) {
+				if (errno == EAGAIN || errno == EINTR)
+					continue;
+				ret = errno;
+			}
+			break;
+		}
+
+		sub = fio_option_dup_subs(buf);
+		len = strlen(sub);
+		if (len + 1 > size) {
+			log_err("fio: no space left to read data\n");
+			free(sub);
+			ret = ENOSPC;
+			break;
+		}
+
+		memcpy(p, sub, len);
+		free(sub);
+		p += len;
+		*p = '\0';
+		size -= len;
+	}
+
+	fclose(fp);
+out:
+	return ret;
+}
+
 static void fio_client_json_init(void)
 {
 	char time_buf[32];
@@ -763,13 +815,17 @@ static int __fio_client_send_local_ini(struct fio_client *client,
 		return ret;
 	}
 
+	/*
+	 * Add extra space for variable expansion, but doesn't guarantee.
+	 */
+	sb.st_size += OPT_LEN_MAX;
 	p_size = sb.st_size + sizeof(*pdu);
 	pdu = malloc(p_size);
 	buf = pdu->buf;
 
 	len = sb.st_size;
 	p = buf;
-	if (read_data(fd, p, len)) {
+	if (read_ini_data(fd, p, len)) {
 		log_err("fio: failed reading job file %s\n", filename);
 		close(fd);
 		free(pdu);

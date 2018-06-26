@@ -533,7 +533,8 @@ extern bool eta_time_within_slack(unsigned int time);
 
 static inline void fio_ro_check(const struct thread_data *td, struct io_u *io_u)
 {
-	assert(!(io_u->ddir == DDIR_WRITE && !td_write(td)));
+	assert(!(io_u->ddir == DDIR_WRITE && !td_write(td)) &&
+	       !(io_u->ddir == DDIR_TRIM && !td_trim(td)));
 }
 
 #define REAL_MAX_JOBS		4096
@@ -567,6 +568,7 @@ extern void fio_fill_default_options(struct thread_data *);
 extern int fio_show_option_help(const char *);
 extern void fio_options_set_ioengine_opts(struct option *long_options, struct thread_data *td);
 extern void fio_options_dup_and_init(struct option *);
+extern char *fio_option_dup_subs(const char *);
 extern void fio_options_mem_dupe(struct thread_data *);
 extern void td_fill_rand_seeds(struct thread_data *);
 extern void td_fill_verify_state_seed(struct thread_data *);
