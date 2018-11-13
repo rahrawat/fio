@@ -13,6 +13,9 @@
 #include "../lib/pow2.h"
 #include "../optgroup.h"
 
+#define IOCB_CMD_PREAD_POLL 9
+#define IOCB_CMD_PWRITE_POLL 10
+
 static int fio_libaio_commit(struct thread_data *td);
 
 struct libaio_data {
@@ -39,6 +42,7 @@ struct libaio_data {
 struct libaio_options {
 	void *pad;
 	unsigned int userspace_reap;
+	unsigned int hipri;
 };
 
 static struct fio_option options[] = {
@@ -48,6 +52,15 @@ static struct fio_option options[] = {
 		.type	= FIO_OPT_STR_SET,
 		.off1	= offsetof(struct libaio_options, userspace_reap),
 		.help	= "Use alternative user-space reap implementation",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_LIBAIO,
+	},
+	{
+		.name	= "hipri",
+		.lname	= "RWF_HIPRI",
+		.type	= FIO_OPT_STR_SET,
+		.off1	= offsetof(struct libaio_options, hipri),
+		.help	= "Use polled IO completions",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_LIBAIO,
 	},
@@ -68,12 +81,17 @@ static inline void ring_inc(struct libaio_data *ld, unsigned int *val,
 static int fio_libaio_prep(struct thread_data fio_unused *td, struct io_u *io_u)
 {
 	struct fio_file *f = io_u->file;
+	struct libaio_options *o = td->eo;
 
-	if (io_u->ddir == DDIR_READ)
+	if (io_u->ddir == DDIR_READ) {
 		io_prep_pread(&io_u->iocb, f->fd, io_u->xfer_buf, io_u->xfer_buflen, io_u->offset);
-	else if (io_u->ddir == DDIR_WRITE)
+		if (o->hipri)
+			io_u->iocb.aio_lio_opcode = IOCB_CMD_PREAD_POLL;
+	} else if (io_u->ddir == DDIR_WRITE) {
 		io_prep_pwrite(&io_u->iocb, f->fd, io_u->xfer_buf, io_u->xfer_buflen, io_u->offset);
-	else if (ddir_sync(io_u->ddir))
+		if (o->hipri)
+			io_u->iocb.aio_lio_opcode = IOCB_CMD_PWRITE_POLL;
+	} else if (ddir_sync(io_u->ddir))
 		io_prep_fsync(&io_u->iocb, f->fd);
 
 	return 0;
@@ -207,6 +225,8 @@ static enum fio_q_status fio_libaio_queue(struct thread_data *td,
 			return FIO_Q_BUSY;
 
 		do_io_u_trim(td, io_u);
+		io_u_mark_submit(td, 1);
+		io_u_mark_complete(td, 1);
 		return FIO_Q_COMPLETED;
 	}
 
