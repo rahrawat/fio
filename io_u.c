@@ -570,8 +570,10 @@ static unsigned long long get_next_buflen(struct thread_data *td, struct io_u *i
 		power_2 = is_power_of_2(minbs);
 		if (!td->o.bs_unaligned && power_2)
 			buflen &= ~(minbs - 1);
-		else if (!td->o.bs_unaligned && !power_2) 
-			buflen -= buflen % minbs; 
+		else if (!td->o.bs_unaligned && !power_2)
+			buflen -= buflen % minbs;
+		if (buflen > maxbs)
+			buflen = maxbs;
 	} while (!io_u_fits(td, io_u, buflen));
 
 	return buflen;
@@ -604,7 +606,7 @@ static inline enum fio_ddir get_rand_ddir(struct thread_data *td)
 
 int io_u_quiesce(struct thread_data *td)
 {
-	int completed = 0;
+	int ret = 0, completed = 0;
 
 	/*
 	 * We are going to sleep, ensure that we flush anything pending as
@@ -619,17 +621,20 @@ int io_u_quiesce(struct thread_data *td)
 		td_io_commit(td);
 
 	while (td->io_u_in_flight) {
-		int ret;
-
 		ret = io_u_queued_complete(td, 1);
 		if (ret > 0)
 			completed += ret;
+		else if (ret < 0)
+			break;
 	}
 
 	if (td->flags & TD_F_REGROW_LOGS)
 		regrow_logs(td);
 
-	return completed;
+	if (completed)
+		return completed;
+
+	return ret;
 }
 
 static enum fio_ddir rate_ddir(struct thread_data *td, enum fio_ddir ddir)
@@ -1556,7 +1561,8 @@ again:
 		assert(!(td->flags & TD_F_CHILD));
 		ret = pthread_cond_wait(&td->free_cond, &td->io_u_lock);
 		assert(ret == 0);
-		goto again;
+		if (!td->error)
+			goto again;
 	}
 
 	if (needs_lock)

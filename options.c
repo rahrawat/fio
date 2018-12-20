@@ -1773,6 +1773,13 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .help = "Linux native asynchronous IO",
 			  },
 #endif
+#ifdef CONFIG_LIBAIO
+#ifdef ARCH_HAVE_AIORING
+			  { .ival = "aio-ring",
+			    .help = "Linux native asynchronous IO",
+			  },
+#endif
+#endif
 #ifdef CONFIG_POSIXAIO
 			  { .ival = "posixaio",
 			    .help = "POSIX asynchronous IO",
@@ -4530,7 +4537,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	{
 		.name	= "kb_base",
 		.lname	= "KB Base",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_STR,
 		.off1	= offsetof(struct thread_options, kb_base),
 		.prio	= 1,
 		.def	= "1024",
@@ -4551,7 +4558,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	{
 		.name	= "unit_base",
 		.lname	= "Unit for quantities of data (Bits or Bytes)",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_STR,
 		.off1	= offsetof(struct thread_options, unit_base),
 		.prio	= 1,
 		.posval = {
